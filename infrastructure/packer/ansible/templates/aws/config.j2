@@ -1,0 +1,7 @@
+[default]
+region = {{ lookup('env', 'AWS_DEFAULT_REGION') }}
+
+[profile admin]
+role_arn = {{ lookup('env', 'ADMIN_ROLE_ARN') }}
+source_profile = default
+region = {{ lookup('env', 'AWS_REGION') }}

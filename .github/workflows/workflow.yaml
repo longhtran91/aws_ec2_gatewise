@@ -1,0 +1,168 @@
+name: Build gatewise-web and push to DockerHub
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+jobs:
+  packer_aws_ami:
+    runs-on: ubuntu-22.04
+    environment: production
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+    
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_ROLE }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_ROLE }}
+        aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+        role-to-assume: ${{ secrets.OIDC_GITHUB_ACTIONS_ARN }}
+        role-session-name: aws_credentials_for_gatewise_packer_ebs_build
+        role-duration-seconds: 3600
+
+    - name: Packer validate
+      uses: pintu-crypto/packer-github-actions@master
+      with:
+        command: validate
+        arguments: -syntax-only
+        working_directory: ./infrastructure/packer
+        target: ami-gatewise-ubuntu-22.02.pkr.hcl
+
+    - name: Packer init
+      uses: pintu-crypto/packer-github-actions@master
+      with:
+        command: init
+        working_directory: ./infrastructure/packer
+        target: ami-gatewise-ubuntu-22.02.pkr.hcl
+
+    - name: Packer build
+      uses: pintu-crypto/packer-github-actions@master
+      with:
+        command: build
+        working_directory: ./infrastructure/packer
+        target: ami-gatewise-ubuntu-22.02.pkr.hcl
+      env:
+        DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+        DOCKER_HUB_ACCESS_TOKEN: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+        AWS_ACCESS_KEY_ID_ADMIN_ROLE: ${{ secrets.AWS_ACCESS_KEY_ID_ADMIN_ROLE }}
+        AWS_SECRET_ACCESS_KEY_ADMIN_ROLE: ${{ secrets.AWS_SECRET_ACCESS_KEY_ADMIN_ROLE }}
+        ADMIN_ROLE_ARN: ${{ secrets.ADMIN_ROLE_ARN }}
+
+  build_docker_image:
+    runs-on: ubuntu-22.04
+    environment: production
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: setup QEMU
+      uses: docker/setup-qemu-action@v2
+      with:
+        platforms: linux/arm64, linux/amd64
+
+    - name: Setup Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Login to DockerHub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }} 
+
+    - name: Build and push web
+      uses: docker/build-push-action@v3
+      with:
+        context: ./app
+        platforms: linux/arm64, linux/amd64
+        push: true
+        tags: ${{ secrets.DOCKER_HUB_USERNAME }}/gatewise-web:latest
+
+  terraform:
+    needs: packer_aws_ami
+    runs-on: ubuntu-22.04
+    environment: production
+    defaults:
+      run:
+        working-directory: './infrastructure/terraform'
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+    
+    - name: Configure AWS Credentials
+      if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_ROLE }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_ROLE }}
+        aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+        role-to-assume: ${{ secrets.OIDC_GITHUB_ACTIONS_ARN }}
+        role-session-name: get_ssm_parameters_for_gatewise_terraform_vars
+        role-duration-seconds: 3600
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+
+    - name: Terraform fmt
+      id: fmt
+      run: terraform fmt -check
+      continue-on-error: true
+
+    - name: Terraform Init
+      id: init
+      run: terraform init
+
+    - name: Terraform Validate
+      id: validate
+      run: terraform validate -no-color
+
+    - name: Terraform Plan
+      id: plan
+      if: github.event_name == 'pull_request'
+      run: terraform plan -no-color -input=false -var="hostname=$(aws ssm get-parameter --name /gatewise/nginx/hostname-alt | jq -r '.Parameter.Value')"
+      continue-on-error: true
+
+    - name: Update Pull Request
+      uses: actions/github-script@v6
+      if: github.event_name == 'pull_request'
+      env:
+        PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+          #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+          #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+          #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+
+          <details><summary>Show Plan</summary>
+
+          \`\`\`\n
+          ${process.env.PLAN}
+          \`\`\`
+
+          </details>
+
+          *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: output
+          })
+
+    - name: Terraform Plan Status
+      if: steps.plan.outcome == 'failure'
+      run: exit 1
+
+    - name: Terraform Apply
+      if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+      run: terraform apply -auto-approve -input=false -var="hostname=$(aws ssm get-parameter --name /gatewise/nginx/hostname-alt | jq -r '.Parameter.Value')"
+
+
+

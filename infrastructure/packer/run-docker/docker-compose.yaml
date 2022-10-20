@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  web:
+    container_name: web
+    image: longhtran91/gatewise-web
+    env_file:
+      - ~/gatewise/secrets/web/app.env
+    expose:
+      - 8000
+    restart: always
+  nginx:
+    container_name: nginx
+    image: arm64v8/nginx:1.23-alpine
+    env_file:
+    - ~/gatewise/nginx/host.env
+    volumes:
+      - ~/gatewise/secrets/ssl/:/etc/nginx/ssl/:ro
+      - ~/gatewise/nginx/templates/:/etc/nginx/templates:ro
+      - ~/gatewise/nginx/htpasswd/:/etc/nginx/conf.d/htpasswd/:ro
+    ports:
+      - 80:80
+      - 443:443
+    links:
+      - web:web
+    depends_on:
+      - web
+    restart: always

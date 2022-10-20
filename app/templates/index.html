@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Vantage Point Apartments</title>
+
+  <!-- Bootstrap core CSS -->
+  <link href="{{ url_for('static', path='bootstrap.min.css') }}" rel="stylesheet">
+  <!-- <link href="../static/bootstrap.min.css" rel="stylesheet"> -->
+
+  <!-- Custom styles for this template -->
+  <link href="{{ url_for('static', path='base.css') }}" rel="stylesheet">
+  <!-- <link href="../static/base.css" rel="stylesheet"> -->
+
+  <script src="https://code.jquery.com/jquery-3.6.1.slim.min.js"></script>
+
+  <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+  <!--[if lt IE 9]>
+      <script src="https://oss.maxcdn.com/html5shiv/3.7.3/html5shiv.min.js"></script>
+      <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+    <![endif]-->
+</head>
+
+<body>
+
+  <div class="container">
+    <div class="form-signin">
+      <h2 class="form-signin-heading">Vantage Point Apartments</h2>
+      <button class="btn btn-lg btn-primary btn-block" type="button" id="open_gate">Open Gate</button>
+      <span class="loader"></span>
+    </div>
+  </div>
+  
+  <script>
+    $("#open_gate").click(function () {
+      $(".loader").css("display", "inline-block");
+      $(".status").remove();
+      fetch('/open_gate', {
+        method: 'POST',
+      })
+        .then((response) => response.json())
+        .then((data) => {
+          $(".loader").css("display", "none");
+          status_txt = "<p class='status'>Status: Gate Opened!</p>"
+          $("#open_gate").after(status_txt);
+        })
+        .catch(error => {
+          $(".loader").css("display", "none");
+          status_txt = "<p class='status'>Status: Error! Try again!</p>"
+          $("#open_gate").after(status_txt);
+        });
+    });
+  </script>
+</body>
+
+</html>

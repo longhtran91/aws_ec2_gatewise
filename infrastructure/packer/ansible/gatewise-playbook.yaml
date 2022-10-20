@@ -1,0 +1,124 @@
+- name: 'Install docker'
+  hosts: default
+  become: true
+  tasks:
+  - name: delay 10 seconds to make sure instance having internet
+    pause:
+      echo: false
+      seconds: 10
+  - name: apt-get update 
+    apt:
+      update_cache: true
+  - name: Install prerequisites
+    apt:
+      pkg:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      - python3-pip
+      - unzip
+      - jq
+      state: latest
+  - name: Add Docker GPG apt key
+    apt_key:
+      url: https://download.docker.com/linux/ubuntu/gpg
+      state: present
+  - name: Add Docker Repository
+    apt_repository:
+      repo: deb https://download.docker.com/linux/ubuntu focal stable
+      state: present
+  - name: install Docker packages
+    apt:
+      pkg:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-compose
+      - docker-compose-plugin
+      state: latest
+      update_cache: true
+  - name: create docker group
+    group:
+      name: docker
+      state: present
+  - name: add ubuntu user to docker group
+    user:
+      name: ubuntu
+      groups: docker
+      append: true
+  - name: reboot hosts
+    reboot:
+      msg: reboot initiated by Ansible
+      test_command: whoami
+
+- name: 'Config host'
+  hosts: default
+  tasks:
+  - name: copy nginx template
+    copy:
+      src: ../nginx/
+      dest: ~/gatewise/nginx/templates/
+  - name: copy docker-compose
+    copy:
+      src: ../run-docker/
+      dest: ~/gatewise
+  - name: copy docker-compose
+    file:
+      path: ~/gatewise/get_configs.sh
+      mode: u+x,g+x,o+x
+  - name: install pip docker
+    pip:
+      name: 
+      - docker
+  - name: login to DockerHub
+    community.docker.docker_login:
+      username: "{{ lookup('env', 'DOCKER_HUB_USERNAME') }}"
+      password: "{{ lookup('env', 'DOCKER_HUB_ACCESS_TOKEN') }}"
+  - name: download awscli
+    get_url:
+      url: https://awscli.amazonaws.com/awscli-exe-linux-{{ansible_facts['architecture']}}.zip
+      dest: ~/awscliv2.zip
+  - name: unzip awscliv2.zip
+    shell: unzip -o ~/awscliv2.zip
+  - name: install awscli
+    become: true
+    shell: /home/ubuntu/aws/install --update
+  - name: cleanup awscli installation zip
+    file:
+      state: absent
+      path: ~/awscliv2.zip
+  - name: cleanup awscli dir
+    file:
+      state: absent
+      path: ~/aws
+  - name: create .aws dir
+    file:
+      state: directory
+      path: ~/.aws
+  - name: config aws default profile with admin role arn
+    template:
+      src: ./templates/aws/config.j2
+      dest: ~/.aws/config
+      mode: '600'
+  - name: config aws default credential
+    template:
+      src: ./templates/aws/credentials.j2
+      dest: ~/.aws/credentials
+      mode: '600'
+  - name: add aws cli alias to admin
+    lineinfile:
+      create: true
+      dest: ~/.bash_aliases
+      line: alias aws='aws --profile admin'
+  - name: copy gatewise.service to /etc/systemd/system/
+    become: true
+    template:
+      src: ./templates/systemd/gatewise.service.j2
+      dest: /etc/systemd/system/gatewise.service
+  - name: enable gatewise.service
+    become: true
+    service:
+      name: gatewise
+      enabled: true
